@@ -1,0 +1,182 @@
+# Using version 2 as 3 does not support resource constraint options (cpu_*, mem_* limits) for non swarm mode in Compose
+version: "2"
+
+services:
+    alfresco:
+        build:
+          context: ./alfresco
+          args:
+            ALFRESCO_TAG: ${ALFRESCO_CE_TAG}
+            DB: postgres
+            SOLR_COMMS: secret 
+        mem_limit: 7488m
+        environment:
+            JAVA_TOOL_OPTIONS: "
+                -Dencryption.keystore.type=JCEKS
+                -Dencryption.cipherAlgorithm=DESede/CBC/PKCS5Padding
+                -Dencryption.keyAlgorithm=DESede
+                -Dencryption.keystore.location=/usr/local/tomcat/shared/classes/alfresco/extension/keystore/keystore
+                -Dmetadata-keystore.password=mp6yc0UD9e
+                -Dmetadata-keystore.aliases=metadata
+                -Dmetadata-keystore.metadata.password=oKIWzVdEdA
+                -Dmetadata-keystore.metadata.algorithm=DESede
+                "
+            JAVA_OPTS : '
+                -Ddb.username=alfresco
+                -Ddb.password=alfresco
+                -Ddb.driver=org.postgresql.Driver
+                -Ddb.url=jdbc:postgresql://alfkendra.cluster-csr3umhrlee0.us-east-1.rds.amazonaws.com:5432/alfresco-comm
+                -Dalfresco_user_store.adminpassword=209c6174da490caeb422f3fa5a7ae634
+                -Dsystem.preferred.password.encoding=bcrypt10
+                -Dsolr.host=solr6
+                -Dsolr.port=8983
+                -Dsolr.port.ssl=8983
+                -Dsolr.secureComms=secret
+                -Dsolr.baseUrl=/solr
+                -Dindex.subsystem.name=solr6
+                -Dsolr.sharedSecret=60zdb86xj6p  
+                -Dalfresco.host=${SERVER_NAME}
+                -Dalfresco.port=443
+                -Dapi-explorer.url=https://${SERVER_NAME}:443/api-explorer
+                -Dalfresco.protocol=https 
+                -Dshare.host=${SERVER_NAME}
+                -Dshare.port=443
+                -Dshare.protocol=https 
+                -Daos.baseUrlOverwrite=https://${SERVER_NAME}/alfresco/aos
+                -Dmessaging.broker.url="failover:(nio://activemq:61616)?timeout=3000&jms.useCompression=true"
+                -Ddeployment.method=DOCKER_COMPOSE
+                -Dcsrf.filter.enabled=false 
+                -Dopencmis.server.override=true
+                -Dopencmis.server.value=https://${SERVER_NAME}:443
+                -DlocalTransform.core-aio.url=http://transform-core-aio:8090/ 
+                -Dcsrf.filter.enabled=false
+                -Dalfresco.restApi.basicAuthScheme=true
+                -Dauthentication.protection.enabled=false
+                -XX:+UseG1GC -XX:+UseStringDeduplication
+                -Dgoogledocs.enabled=false 
+                -Xms6976m -Xmx6976m   
+                -XX:MinRAMPercentage=50 -XX:MaxRAMPercentage=80
+            '
+        volumes: 
+            - alf-repo-data:/usr/local/tomcat/alf_data
+            - logs-alfresco:/usr/local/tomcat/logs    
+        
+
+    transform-core-aio:
+        image: alfresco/alfresco-transform-core-aio:${TRANSFORM_ENGINE_TAG}
+        mem_limit: 2048m
+        environment:
+            JAVA_OPTS: "
+              -XX:MinRAMPercentage=50 -XX:MaxRAMPercentage=80
+              -Dserver.tomcat.threads.max=12
+              -Dserver.tomcat.threads.min=4
+              -Dlogging.level.org.alfresco.transform.router.TransformerDebug=ERROR
+            "
+
+    share:
+        build:
+          context: ./share
+          args:
+            SHARE_TAG: ${SHARE_TAG}
+            SERVER_NAME: ${SERVER_NAME}
+        mem_limit: 1872m
+        environment:
+            REPO_HOST: "alfresco"
+            REPO_PORT: "8080"
+            CSRF_FILTER_REFERER: "https://ec2-54-204-116-157.compute-1.amazonaws.com:443/.*"
+            CSRF_FILTER_ORIGIN: "https://ec2-54-204-116-157.compute-1.amazonaws.com:443"
+            JAVA_OPTS: "
+                -Xms1744m -Xmx1744m
+                -Dalfresco.context=alfresco
+                -Dalfresco.protocol=https
+                -XX:MinRAMPercentage=50 -XX:MaxRAMPercentage=80
+                "
+        volumes: 
+            - logs-share:/usr/local/tomcat/logs   
+     
+
+    solr6:
+        build:
+          context: ./search
+          args:
+            SEARCH_TAG: ${SEARCH_CE_TAG}
+            SOLR_HOSTNAME: solr6
+            ALFRESCO_HOSTNAME: alfresco
+            ALFRESCO_COMMS: secret 
+            CROSS_LOCALE: "true"
+        mem_limit: 3744m
+        environment:
+            #Solr needs to know how to register itself with Alfresco
+            SOLR_ALFRESCO_HOST: "alfresco"
+            SOLR_ALFRESCO_PORT:  "8080" 
+            #Alfresco needs to know how to call solr
+            SOLR_SOLR_HOST: "solr6"
+            SOLR_SOLR_PORT: "8983"
+            #Create the default alfresco and archive cores
+            SOLR_CREATE_ALFRESCO_DEFAULTS: "alfresco,archive"
+            SOLR_JAVA_MEM: "-Xms3488m -Xmx3488m" 
+            SOLR_OPTS: "
+                -XX:NewSize=1616m
+                -XX:MaxNewSize=1616m
+                -Dalfresco.secureComms.secret=60zdb86xj6p 
+            "
+        volumes: 
+            - solr-data:/opt/alfresco-search-services/data   
+        
+
+    activemq:
+        image: alfresco/alfresco-activemq:${ACTIVEMQ_TAG}
+        mem_limit: 1g
+        ports:
+            - 8161:8161
+        volumes: 
+            - activemq-data:/opt/activemq/data  
+
+    content-app:
+        image: alfresco/alfresco-content-app:${ACA_TAG}
+        mem_limit: 256m
+        depends_on:
+            - alfresco
+            - share
+
+    # HTTP proxy to provide HTTP Default port access to services
+    # SOLR API and SOLR Web Console are protected to avoid unauthenticated access
+    proxy:
+        image: nginx:stable-alpine
+        mem_limit: 128m
+        depends_on:
+            - alfresco
+            - solr6
+            - share
+            - content-app
+        volumes:
+            - ./config/nginx.conf:/etc/nginx/nginx.conf
+            - ./config/nginx.htpasswd:/etc/nginx/conf.d/nginx.htpasswd 
+            - ./config/cert/cert.crt:/etc/nginx/localhost.cer
+            - ./config/cert/cert.key:/etc/nginx/localhost.key 
+        ports:
+            - 443:443
+
+    
+volumes:
+    alf-repo-data:
+        external: true
+    logs-alfresco:
+        external: true
+    logs-share:
+        external: true
+    solr-data:
+        external: true
+    activemq-data:
+        external: true
+    
+
+
+
+    
+
+    
+
+    
+
+
